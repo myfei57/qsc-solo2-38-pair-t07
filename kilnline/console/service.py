@@ -890,10 +890,9 @@ class ControlService:
     ) -> dict[str, Any]:
         self.load_car(car_id, initial_moisture_pct=initial_moisture_pct)
         quantum = max(self._step(step), 5.0)
-        target = self.dryer.target_moisture_pct
         self.run_until(
-            lambda: self.dryer.run(car_id).moisture_pct <= target,
-            label="drying_moisture",
+            lambda: self.dryer.ready(car_id),
+            label="drying_ready",
             limit_s=limit_s,
             step=quantum,
         )
@@ -1028,11 +1027,8 @@ class ControlService:
         self.calibrate_slurry(density_g_cm3=density_g_cm3, author="batch_setup")
         for car in car_ids:
             self.load_car(car)
-        target_moisture = self.dryer.target_moisture_pct
         self.run_until(
-            lambda: all(
-                self.dryer.run(car).moisture_pct <= target_moisture for car in car_ids
-            ),
+            lambda: all(self.dryer.ready(car) for car in car_ids),
             label="batch_drying",
             limit_s=limit_s,
             step=quantum,

@@ -101,12 +101,20 @@ class DryerBank:
         label = self._label(car_id)
         if label in self._runs:
             raise DuplicateRecord("carrier is already in the dryer", car_id=label)
+        initial = float(initial_moisture_pct)
+        if initial <= self._target:
+            raise ValidationError(
+                "initial moisture must exceed the dry target",
+                car_id=label,
+                initial_moisture_pct=initial,
+                target_moisture_pct=self._target,
+            )
         self._runs[label] = {
             "car_id": label,
             "state": STATE_DRYING,
             "loaded_at": float(at),
             "elapsed_s": 0.0,
-            "moisture_pct": 0.0,
+            "moisture_pct": initial,
             "completed_at": None,
         }
         return self.run(label)
@@ -115,6 +123,11 @@ class DryerBank:
         step = float(dt)
         if step <= 0.0:
             raise ValidationError("dryer advance step must be positive", dt=dt)
+        for run in self._runs.values():
+            if run["state"] != STATE_DRYING:
+                continue
+            run["elapsed_s"] += step
+            run["moisture_pct"] = max(0.0, run["moisture_pct"] - self._rate * step)
         return self.active()
 
     def complete(self, car_id: str, *, at: float) -> DryingRun:
@@ -126,6 +139,21 @@ class DryerBank:
             raise StateConflict("carrier is already dry", car_id=label)
         if run["state"] != STATE_DRYING:
             raise StateConflict("carrier is not drying", car_id=label, state=run["state"])
+        if run["elapsed_s"] < self._min_duration:
+            raise OrderingViolation(
+                "carrier has not dwelled in the dryer long enough",
+                car_id=label,
+                elapsed_s=run["elapsed_s"],
+                required_s=self._min_duration,
+                stage="dry",
+            )
+        if run["moisture_pct"] > self._target:
+            raise ThresholdExceeded(
+                "carrier is still above the moisture target",
+                car_id=label,
+                moisture_pct=run["moisture_pct"],
+                target_moisture_pct=self._target,
+            )
         run["state"] = STATE_DONE
         run["completed_at"] = float(at)
         self._gates.satisfy(self._gate_name, at=at, detail=f"carrier {label} dry")
@@ -158,6 +186,14 @@ class DryerBank:
             target_moisture_pct=self._target,
             completed_at=None if run["completed_at"] is None else float(run["completed_at"]),
         )
+
+    def ready(self, car_id: str) -> bool:
+        """True while a drying carrier has met both completion conditions."""
+
+        run = self._runs.get(self._label(car_id))
+        if run is None or run["state"] != STATE_DRYING:
+            return False
+        return run["moisture_pct"] <= self._target and run["elapsed_s"] >= self._min_duration
 
     def require_dry(self, car_id: str) -> DryingRun:
         run = self.run(car_id)

@@ -136,11 +136,6 @@ class SlurryStation:
     def reference(self, *, now: float, generation: int) -> Baseline:
         return self._baselines.require_current(self._key, now=now, generation=int(generation))
 
-    def latest_reference(self) -> Baseline | None:
-        """Newest recorded calibration, whatever generation or age it has."""
-
-        return self._baselines.latest(self._key)
-
     def require_usable(
         self,
         *,
