@@ -81,8 +81,11 @@ class GlazeStation:
             raise StateConflict("carrier is already on the glaze line", car_id=label)
         self._dryer.require_dry(label)
         self._gates.require(self._dryer.gate_name)
-        self._slurry.require_in_band(density_g_cm3)
-        baseline = self._slurry.latest_reference()
+        baseline, _verdict = self._slurry.require_usable(
+            density_g_cm3=density_g_cm3,
+            now=now,
+            generation=parameter_generation,
+        )
         self._runs[label] = {
             "car_id": label,
             "state": STATE_COATED,
@@ -90,7 +93,7 @@ class GlazeStation:
             "finished_at": None,
             "density_g_cm3": float(density_g_cm3),
             "parameter_generation": int(parameter_generation),
-            "reference_generation": 0 if baseline is None else baseline.generation,
+            "reference_generation": baseline.generation,
         }
         self._gates.satisfy(self._gate_name, at=at, detail=f"carrier {label} coated")
         return self.run(label)

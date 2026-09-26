@@ -22,6 +22,8 @@ from kilnline.errors import (
 )
 from kilnline.interlock.gate import PreGateRegistry
 
+STAGE = "dry"
+
 DRYER_COMPLETE_GATE = "dryer.complete"
 
 STATE_DRYING = "drying"
@@ -101,12 +103,20 @@ class DryerBank:
         label = self._label(car_id)
         if label in self._runs:
             raise DuplicateRecord("carrier is already in the dryer", car_id=label)
+        moisture = float(initial_moisture_pct)
+        if moisture < self._target:
+            raise ValidationError(
+                "carrier is already below the dryer moisture target",
+                car_id=label,
+                moisture_pct=moisture,
+                target_moisture_pct=self._target,
+            )
         self._runs[label] = {
             "car_id": label,
             "state": STATE_DRYING,
             "loaded_at": float(at),
             "elapsed_s": 0.0,
-            "moisture_pct": 0.0,
+            "moisture_pct": moisture,
             "completed_at": None,
         }
         return self.run(label)
@@ -115,6 +125,11 @@ class DryerBank:
         step = float(dt)
         if step <= 0.0:
             raise ValidationError("dryer advance step must be positive", dt=dt)
+        for run in self._runs.values():
+            if run["state"] != STATE_DRYING:
+                continue
+            run["elapsed_s"] = float(run["elapsed_s"]) + step
+            run["moisture_pct"] = max(self._target, float(run["moisture_pct"]) - self._rate * step)
         return self.active()
 
     def complete(self, car_id: str, *, at: float) -> DryingRun:
@@ -126,6 +141,25 @@ class DryerBank:
             raise StateConflict("carrier is already dry", car_id=label)
         if run["state"] != STATE_DRYING:
             raise StateConflict("carrier is not drying", car_id=label, state=run["state"])
+        elapsed = float(run["elapsed_s"])
+        if elapsed < self._min_duration:
+            raise OrderingViolation(
+                "carrier has not spent the minimum drying time in the dryer",
+                car_id=label,
+                state=run["state"],
+                stage=STAGE,
+                elapsed_s=elapsed,
+                required_s=self._min_duration,
+            )
+        moisture = float(run["moisture_pct"])
+        if moisture > self._target:
+            raise ThresholdExceeded(
+                "carrier moisture is still above the drying target",
+                car_id=label,
+                stage=STAGE,
+                moisture_pct=moisture,
+                target_moisture_pct=self._target,
+            )
         run["state"] = STATE_DONE
         run["completed_at"] = float(at)
         self._gates.satisfy(self._gate_name, at=at, detail=f"carrier {label} dry")
